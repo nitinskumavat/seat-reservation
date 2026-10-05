@@ -163,16 +163,14 @@ steps 4–11 were then implemented back-to-back, each committed with its own tes
 
 ## What I'd do next
 
-1. **HTTPS and a domain.** The live service is plain HTTP on an IP; a reverse proxy such as
-   Caddy would add TLS with no app changes.
-2. **Return 503 with `Retry-After`** instead of a 500 when the pool times out, and add
+1. **Return 503 with `Retry-After`** instead of a 500 when the pool times out, and add
    load-shedding (a bounded in-flight limit on reserve) so overload degrades into fast,
    retryable responses.
-3. **Time-boxed holds and payment**, as described above.
-4. **Prune the seat gauges.** A scrape already costs one grouped query. But gauges are
+2. **Time-boxed holds and payment**, as described above.
+3. **Prune the seat gauges.** A scrape already costs one grouped query. But gauges are
    registered for every show ever created, so the series count grows forever; only shows
    that are on sale should be tracked.
-5. **Real identity:** replace the demo token endpoint with an OIDC provider. Nothing else
+4. **Real identity:** replace the demo token endpoint with an OIDC provider. Nothing else
    changes, because the service only reads `sub`.
-6. **Natural seat ordering** in `GET /shows/{id}` (`A2` before `A12`). This is display only; the
+5. **Natural seat ordering** in `GET /shows/{id}` (`A2` before `A12`). This is display only; the
    lock order can stay lexicographic.
