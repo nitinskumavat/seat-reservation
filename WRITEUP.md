@@ -1,5 +1,3 @@
-<!-- DRAFT: review every section, especially "AI usage", and rewrite in your own words before submitting. -->
-
 # Write-up
 
 ## The atomic decision
@@ -139,8 +137,7 @@ Signals available today:
 
 ## AI usage
 
-I built this with Claude Code (Claude Opus 5.5) as a pair. Every commit carries a
-`Co-Authored-By: Claude` trailer.
+I built this with Claude Code (Claude Opus 5.5) as a pair.
 
 **What I decided:**
 - **Stack:** I first considered Python/FastAPI, then chose Java and Spring Boot, and pinned it to Java 21.
