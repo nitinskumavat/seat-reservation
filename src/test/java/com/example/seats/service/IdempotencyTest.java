@@ -105,7 +105,7 @@ class IdempotencyTest extends ApiTestSupport {
 	}
 
 	@Test
-	void declineIsNotStoredSoRetryIsReevaluated() { // cases 8 and 9
+	void declineIsNotStoredSoRetryIsReevaluated() { // case 9
 		UUID show = createShow(4, "A1", "A2");
 		String alice = unique("alice");
 		reservations.reserve(unique("bob"), show, List.of("A1"), "k");
@@ -113,6 +113,22 @@ class IdempotencyTest extends ApiTestSupport {
 		assertThatThrownBy(() -> reservations.reserve(alice, show, List.of("A1"), "k1"))
 			.isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.reason()).isEqualTo("seat_taken"));
 		// The failed attempt left no key behind, so the key is still free for a fresh request.
+		assertThat(jdbc.queryForObject("SELECT count(*) FROM reservations WHERE user_id = ?", Integer.class, alice))
+			.isZero();
+	}
+
+	@Test
+	void concurrentDuplicatesOfAFailingRequestAreEachEvaluatedFresh() throws Exception { // case 8
+		UUID show = createShow(4, "A1");
+		reservations.reserve(unique("bob"), show, List.of("A1"), "k");
+		String alice = unique("alice");
+
+		// Each duplicate waits on the first one's uncommitted key; when that rolls back, the next
+		// claims the key and is evaluated itself. None may replay a reservation that never existed.
+		Map<String, Integer> outcomes = race(20,
+				i -> () -> reservations.reserve(alice, show, List.of("A1"), "k1"));
+
+		assertThat(outcomes).containsExactlyEntriesOf(Map.of("seat_taken", 20));
 		assertThat(jdbc.queryForObject("SELECT count(*) FROM reservations WHERE user_id = ?", Integer.class, alice))
 			.isZero();
 	}

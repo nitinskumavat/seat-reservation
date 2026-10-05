@@ -216,7 +216,7 @@ expected for an on-sale.
 ./mvnw test
 ```
 
-There are 50 tests. They run against a real Postgres started by Testcontainers, so Docker must be
+There are 51 tests. They run against a real Postgres started by Testcontainers, so Docker must be
 running. The concurrency tests cover:
 - 500 racers on one seat
 - mirrored multi-seat requests (deadlock check)
