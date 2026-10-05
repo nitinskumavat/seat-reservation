@@ -162,17 +162,6 @@ docs. `DESIGN.md` was agreed before any code. I reviewed steps 1–3 as they lan
 steps 4–11 were then implemented back-to-back, each committed with its own tests. Later changes
 (the dashboard, doc fixes) were made one request at a time.
 
-**Issues Claude caught during implementation:**
-- A 30s readiness timeout caused by the probe borrowing from the pool.
-- Cancel needing an explicit ordered lock to rule out deadlocks against concurrent reserves.
-- While checking every dashboard panel against a live burst: metric scrapes timing out because
-  the seat gauges ran one query per show, and decline counters that first appeared already at
-  N, which hid the first burst from Prometheus' `increase()`.
-
-Claude also ran mutation checks (deliberately breaking the code) to confirm the tests catch a
-missing lock. One showed the cancel deadlock test doesn't, because Postgres happens to scan in
-label order. The lock stays, so the order is guaranteed rather than incidental.
-
 ## What I'd do next
 
 1. **HTTPS and a domain.** The live service is plain HTTP on an IP; a reverse proxy such as
