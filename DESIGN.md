@@ -185,11 +185,10 @@ Zero 5xx is a requirement: every domain outcome maps to 4xx.
 6. Per-user limit → verify: 10 parallel on limit 4 → ≤ 4 seats
 7. Cancel → verify: owner-only; seat re-bookable; cannot free another user's seat
 8. Metrics + structured logs → verify: `/actuator/prometheus` reconciles with `GET /shows`
-9. Burst script → verify: passes against local compose
+9. Burst script (`./burst.sh <BASE_URL>`, single-file Java on the JDK 21 the project already needs; no extra dependencies) → verify: passes against local compose
 10. Deploy (deferred; Render + Neon proposed)
 11. README + WRITEUP.md
 
 ## Open
 
-- Burst script language (proposed: Python asyncio + httpx, runnable via Docker)
 - Deploy target (proposed: Render + Neon; deferred)
