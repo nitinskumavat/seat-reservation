@@ -144,14 +144,14 @@ I built this with Claude Code (Claude Opus 5.5) as a pair.
 - **Stack:** I first considered Python/FastAPI, then chose Java and Spring Boot, and pinned it to Java 21.
 - **Partial requests:** all-or-nothing.
 - **Release model:** confirm plus explicit cancel, over time-boxed holds, after asking for the trade-off to be explained.
-- **Schema:** adding a `users` table, and using Postgres enums for status instead of text with CHECK constraints.
+- **Schema:** the data model (tables, keys and constraints), including a `users` table and Postgres enums for status instead of text with CHECK constraints.
+- **Edge cases:** the cases to check, including every idempotency case in DESIGN.md (same key with a different body, concurrent duplicates, retry after a decline or a cancel).
 - **Code layout:** layered controller/service/repository structure.
 - **Scope and deployment:** running locally first, then deploying to my own VPS over plain HTTP on an IP.
 - **Observability extra:** adding an optional Prometheus + Grafana dashboard.
 
 **What Claude proposed and I accepted:**
 - The core mechanisms: `FOR UPDATE` in label order, the conditional counter update, and claiming the idempotency key with `ON CONFLICT` inside the same transaction.
-- The idempotency case table.
 - Using raw SQL over JPA so the locking stays visible.
 - The demo token endpoint.
 - `X-Admin-Token` instead of a bearer admin token, to avoid clashing with the JWT filter.
