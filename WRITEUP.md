@@ -21,8 +21,9 @@ If any locked seat is not `available`, the transaction rolls back and the caller
 a seat wait for the current lock holder. When the lock is released, Postgres re-reads the row's
 latest committed version for the waiter (READ COMMITTED re-check). The waiter therefore sees
 `confirmed` and declines. With 500 racers on one seat, exactly one commits and 499 get a clean
-409. I checked this with a mutation test: removing `FOR UPDATE` makes all three concurrency
-tests fail (multiple winners, 18 seats "sold" from 6).
+409. I checked this with a mutation test: with `FOR UPDATE` removed, all three concurrency tests
+fail. The hot seat gets several winners, and in the overlap test nine requests "succeed" for
+18 seats when the show has only 6.
 
 **No deadlocks for multi-seat requests.** Every transaction locks seats in label order, so two
 requests for `[A1, A2]` and `[A2, A1]` cannot each hold one seat and wait for the other. Cancel
@@ -106,7 +107,8 @@ This service chooses **consistency**. Postgres is the only source of truth. The 
 seat state in memory and never decides locally. If the app cannot reach the database:
 - Readiness returns 503 within about 2 seconds (it uses its own short-timeout connection, not
   the pool), so a load balancer stops routing traffic.
-- Reserve requests fail rather than guess.
+- Reserve requests fail rather than guess. Today a caller waits up to the 30s pool timeout
+  and then gets a 500. Returning a fast 503 is on the next-steps list.
 
 A seat is never sold that the database has not committed. The cost is that sales stop during
 the partition. For a ticketing system of record, that is the right trade: an oversold seat is
@@ -155,8 +157,9 @@ I built this with Claude Code (Claude Opus 5.5) as a pair. Every commit carries 
 - The demo token endpoint.
 - `X-Admin-Token` instead of a bearer admin token, to avoid clashing with the JWT filter.
 
-**What Claude wrote:** all code, tests and the burst script. I reviewed each step, and
-`DESIGN.md` was agreed before any code.
+**What Claude wrote:** all code, tests and the burst script. `DESIGN.md` was agreed before any
+code. I reviewed steps 1–3 as they landed; at my request, steps 4–11 were then implemented
+back-to-back, each committed with its own tests.
 
 **Issues Claude caught during implementation:**
 - A port clash with my local Postgres.

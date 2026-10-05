@@ -1,88 +1,163 @@
 # Seat Reservation
 
-A JSON API that sells assigned seats for a show and stays correct under an on-sale stampede:
-no seat is sold twice, no user exceeds their per-show limit, and a retried request never
-reserves twice.
+A JSON API that sells assigned seats for a show and stays correct when thousands of buyers hit
+"book" at once:
 
-Java 21, Spring Boot 4.1, Postgres 17, plain SQL via `JdbcTemplate`.
+- a seat is never sold twice; a race for one seat has exactly one winner, everyone else gets a clean `409`
+- a user never holds more than the show's `per_user_limit` seats (default 4)
+- a retried request with the same idempotency key never reserves twice
 
-- Design and reasoning: [DESIGN.md](DESIGN.md)
-- Write-up: [WRITEUP.md](WRITEUP.md)
-- Live URL: not deployed yet
+Java 21 · Spring Boot 4.1 · Postgres 17 · plain SQL via `JdbcTemplate`
 
-## Run locally
+| Document | What's in it |
+|---|---|
+| [DESIGN.md](DESIGN.md) | Schema, the exact reserve and cancel transactions, every idempotency case |
+| [WRITEUP.md](WRITEUP.md) | Why it is race-free, idempotency, holds, consistency, alerting, AI usage, next steps |
 
-Requires Docker. Java 21 is only needed for running the tests and the burst script.
+**Live URL:** not deployed yet. **Live logs recording:** to be added after deployment.
+
+## Quick start
+
+Requires Docker with Compose v2. Ports `8080` (API) and `5433` (Postgres) must be free.
+Java 21 is needed only for the tests and the burst script.
 
 ```bash
-docker compose up --build
+docker compose up --build -d
+curl localhost:8080/actuator/health/readiness      # {"status":"UP"}
 ```
 
-The API is on `http://localhost:8080`, Postgres on host port `5433`.
+Stop with `docker compose down`. The database is discarded, so the next start is empty.
 
-## Try it
+## Walkthrough
+
+Copy and paste the block below. It needs `jq`. Each run uses fresh user names, so you can run it
+again; idempotency keys are per user.
 
 ```bash
-# Admin creates a show (local admin token: dev-admin-token)
-curl -s -X POST localhost:8080/shows \
-  -H 'X-Admin-Token: dev-admin-token' -H 'Content-Type: application/json' \
-  -d '{"name":"friday-night","seats":["A1","A2","A3","A12"],"price_paise":25000}'
+BASE=http://localhost:8080
+RUN=$RANDOM
 
-# Get a user token (demo auth: any user id; the user is created on first use)
-curl -s -X POST localhost:8080/auth/token -H 'Content-Type: application/json' -d '{"user_id":"alice"}'
+# 1. Admin creates a show. The local admin token is dev-admin-token.
+SHOW_ID=$(curl -s -X POST $BASE/shows -H 'X-Admin-Token: dev-admin-token' \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"friday-night","seats":["A1","A2","A3","A12"],"price_paise":25000}' | jq -r .id)
 
-# Reserve (identity comes from the token; the key can also go in an Idempotency-Key header)
-curl -s -X POST localhost:8080/shows/$SHOW_ID/reserve \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"seats":["A12"],"idempotency_key":"k1"}'
+# 2. Get tokens. Demo auth: any user id works, and the user is created on first use.
+token() { curl -s -X POST $BASE/auth/token -H 'Content-Type: application/json' -d "{\"user_id\":\"$1\"}" | jq -r .token; }
+ALICE=$(token alice-$RUN)
+BOB=$(token bob-$RUN)
 
-# Show state with per-seat status and counts
-curl -s localhost:8080/shows/$SHOW_ID
+reserve() { curl -s -X POST $BASE/shows/$SHOW_ID/reserve -H "Authorization: Bearer $1" \
+  -H 'Content-Type: application/json' -d "$2" | jq -c .; }
+cancel()  { curl -s -X POST $BASE/reservations/$2/cancel -H "Authorization: Bearer $1" | jq -c .; }
 
-# Cancel (owner only)
-curl -s -X POST localhost:8080/reservations/$RESERVATION_ID/cancel -H "Authorization: Bearer $TOKEN"
+# 3. Alice reserves A12 → 201 confirmed
+RES=$(reserve $ALICE '{"seats":["A12"],"idempotency_key":"k1"}'); echo "$RES"
+RES_ID=$(jq -r .reservation_id <<< "$RES")
+
+# 4. Same request again → the same reservation (idempotent replay; nothing new is booked)
+reserve $ALICE '{"seats":["A12"],"idempotency_key":"k1"}'
+
+# 5. Same key, different seats → 409 key_reused
+reserve $ALICE '{"seats":["A1"],"idempotency_key":"k1"}'
+
+# 6. Bob wants A12 → 409 seat_taken. The user_id in the body is ignored; identity comes from the token.
+reserve $BOB '{"seats":["A12"],"idempotency_key":"b1","user_id":"alice"}'
+
+# 7. Show state → available 3, held 0, confirmed 1
+curl -s $BASE/shows/$SHOW_ID | jq -c '{total_seats, counts}'
+
+# 8. Bob cannot cancel Alice's reservation → 404 not_found; Alice can → status "cancelled"
+cancel $BOB $RES_ID
+cancel $ALICE $RES_ID
 ```
 
-### Endpoints
+A successful reservation (step 3) and a decline (step 6) look like this:
 
-| Endpoint | Auth | Notes |
+```json
+{"reservation_id":"3f0c…","show_id":"9b1e…","user_id":"alice","seats":["A12"],"amount_paise":25000,"status":"confirmed"}
+{"reason":"seat_taken","message":"one or more requested seats are not available"}
+```
+
+## API
+
+| Endpoint | Auth | Success |
 |---|---|---|
-| `POST /auth/token` | none | `{"user_id"}` → `{token, user_id, expires_at}` (HS256, 24h) |
-| `POST /shows` | `X-Admin-Token` | `{name, seats[], price_paise, per_user_limit?}` (default limit 4) → 201 |
-| `GET /shows/{id}` | none | Per-seat status and `counts`; `available + held + confirmed == total_seats` |
-| `POST /shows/{id}/reserve` | Bearer | `{seats[], idempotency_key}` → 201 reservation |
-| `POST /reservations/{id}/cancel` | Bearer | Owner only; idempotent → 200 |
-| `GET /actuator/health/liveness` | none | Process is up |
-| `GET /actuator/health/readiness` | none | 503 within ~2s if Postgres is unreachable |
-| `GET /actuator/prometheus` | none | Metrics |
+| `POST /auth/token` `{user_id}` | none | `200 {token, user_id, expires_at}`. HS256 JWT, valid 24h |
+| `POST /shows` `{name, seats[], price_paise, per_user_limit?}` | `X-Admin-Token` header | `201`, the show with every seat `available` |
+| `GET /shows/{id}` | none | `200`, per-seat status and `counts`; `available + held + confirmed == total_seats` |
+| `POST /shows/{id}/reserve` `{seats[], idempotency_key}` | `Authorization: Bearer <token>` | `201`, the reservation |
+| `POST /reservations/{id}/cancel` | `Authorization: Bearer <token>` | `200`, the reservation with `status: "cancelled"` |
+| `GET /actuator/health/liveness` | none | `200` while the process is up |
+| `GET /actuator/health/readiness` | none | `200`; `503` within about 2s when Postgres is unreachable |
+| `GET /actuator/prometheus` | none | Prometheus metrics |
 
-### Outcomes
+**Reserve rules**
+
+- **Seats:** non-empty and no duplicates. Multi-seat requests are **all-or-nothing**: if any seat is taken, nothing is reserved.
+- **Idempotency key:** required, 1–128 characters. Send it as the `Idempotency-Key` header or as `idempotency_key` in the body. If you send both, they must match.
+- **Key scope:** keys are per user. A retry with the same key and the same seats returns the original reservation with `201`, even after it was cancelled (then with `status: "cancelled"`). It never books again.
+- **Declines are not remembered:** retrying a declined request re-evaluates it.
+- **Cancel:** only the owner can cancel. Someone else's reservation returns `404`. Cancelling twice returns `200` both times.
+
+**Outcomes**
 
 | Status | `reason` | When |
 |---|---|---|
 | 201 | | Reserved, or an idempotent replay of the original reservation |
-| 409 | `seat_taken` | Any requested seat is not available (all-or-nothing: nothing is reserved) |
-| 409 | `per_user_limit` | The user would hold more than `per_user_limit` seats for the show |
-| 409 | `key_reused` | Same idempotency key with different seats or show |
-| 400 | `invalid_request` | Malformed body, duplicate seats, missing key |
-| 404 | `not_found` | Unknown show or seat, or a reservation that is not the caller's |
-| 401 / 403 | | Missing or invalid token / not admin |
+| 409 | `seat_taken` | A requested seat is already confirmed |
+| 409 | `per_user_limit` | The user would hold more than `per_user_limit` seats for this show |
+| 409 | `key_reused` | The key was already used with different seats or a different show |
+| 400 | `invalid_request` | Malformed JSON, missing or invalid fields, duplicate seats, missing key |
+| 404 | `not_found` | Unknown show or seat label, or a reservation that isn't the caller's |
+| 401 | | Missing, malformed, expired or wrongly signed token; wrong admin token |
+| 403 | | A user token on an admin route |
+
+**Conventions**
+- JSON field names are snake_case.
+- Money is integer paise.
+- Error bodies are `{"reason", "message"}`.
+- `GET /shows/{id}` lists seats sorted as strings, so `A12` comes before `A2`.
+- `held` is always 0 because reservations confirm immediately; see [WRITEUP.md](WRITEUP.md#holds-and-expiry).
 
 ## Burst test
 
-Reproduces the on-sale stampede against any running instance and reconciles the result:
+`./burst.sh` reproduces the on-sale stampede against a running instance and checks the result.
+It needs Java 21 and the service already running.
 
 ```bash
-./burst.sh                       # http://localhost:8080
-./burst.sh https://your-host     # remote; set ADMIN_TOKEN if it is not the dev default
+./burst.sh                                     # http://localhost:8080
+ADMIN_TOKEN=<secret> ./burst.sh https://host   # any other instance
 ```
 
-It runs a hot-seat storm (500 users on one seat), a 20k-request stampede with duplicate retries,
-key reuse, a per-user limit race and a spoofed-identity check. Then it prints the outcome
-distribution and compares client tallies with `GET /shows` and the Prometheus counters. It exits
-non-zero on any violation. Tunable with `USERS`, `REQUESTS`, `CONCURRENCY`, `HOT_STORM`.
+| Phase | What it does | Must hold |
+|---|---|---|
+| 1. Hot-seat storm | 500 users reserve seat A12 at the same instant | exactly one 201, the rest `409 seat_taken` |
+| 2. Stampede | ~22k reserves on a 1000-seat show: 40% on ten "good" seats, 10% sent twice with the same key; the show's counts are polled throughout | no seat in two reservations; counts always add up |
+| 3. Key reuse | 200 earlier keys resent with different seats | all `409 key_reused` |
+| 4. Per-user limit | one user fires 10 parallel reserves on a limit-4 show | exactly 4 succeed |
+| 5. Spoofed identity | body carries another `user_id`; then tries to cancel another user's reservation | token user wins; cancel gets 404 |
 
-Sample local run:
+At the end it prints the outcome distribution and checks three sources against each other:
+- what clients received
+- what `GET /shows/{id}` reports
+- how much each Prometheus counter moved
+
+It exits `1` on any violation, including any 5xx.
+
+| Variable | Default | |
+|---|---|---|
+| `ADMIN_TOKEN` | `dev-admin-token` | Needed to create the test shows |
+| `USERS` | `2000` | Distinct users (tokens minted up front) |
+| `REQUESTS` | `20000` | Stampede requests, before the ~10% duplicates |
+| `CONCURRENCY` | `500` | Requests in flight at once |
+| `HOT_STORM` | `500` | Users in the hot-seat storm |
+
+**Notes**
+- Each run creates three new shows and new users, and leaves them in place.
+- The metrics comparison assumes nothing else is hitting the service during the run.
+
+Sample run on a laptop (local Docker):
 
 ```
 phase 1  hot-seat storm     500 requests    0.6s  {201=1, 409 seat_taken=499}
@@ -99,8 +174,18 @@ reconciliation (main show)
   201s                  908 = 779 new + 129 idempotent replays
   seats gauge           available=0 held=0 confirmed=1000
 
+metrics delta vs client tallies (assumes no other traffic during the run)
+  reservations_confirmed_total                               metrics    785  client    785  ok
+  reservations_declined_total{reason="idempotent_replay"}    metrics    129  client    129  ok
+  reservations_declined_total{reason="key_reused"}           metrics    200  client    200  ok
+  reservations_declined_total{reason="per_user_limit"}       metrics    277  client    277  ok
+  reservations_declined_total{reason="seat_taken"}           metrics  21297  client  21297  ok
+
 PASS: no double-sells, zero 5xx, invariant held, idempotency and limits held
 ```
+
+The 1000-seat hall sells out within seconds, so most stampede requests end as `seat_taken`. That's
+expected for an on-sale.
 
 ## Tests
 
@@ -108,27 +193,63 @@ PASS: no double-sells, zero 5xx, invariant held, idempotency and limits held
 ./mvnw test
 ```
 
-Runs against a real Postgres via Testcontainers (Docker required). Concurrency tests cover
-500 racers on one seat, mirrored multi-seat requests, overlapping requests, concurrent
-idempotent retries, parallel requests against the per-user limit, and cancels racing reserves.
+There are 50 tests. They run against a real Postgres started by Testcontainers, so Docker must be
+running. The concurrency tests cover:
+- 500 racers on one seat
+- mirrored multi-seat requests (deadlock check)
+- overlapping multi-seat requests
+- concurrent idempotent retries
+- parallel requests against the per-user limit
+- cancels racing reserves
 
 ## Observability
 
-- **Metrics** (`/actuator/prometheus`): `reservations_confirmed_total`,
-  `reservations_cancelled_total`, `reservations_declined_total{reason}` (including
-  `idempotent_replay`), `seats{show,status}` read from the database at scrape time, plus
-  Spring's `http_server_requests_seconds` and Hikari pool metrics.
-- **Logs**: JSON (ECS) on stdout. Every line of a request carries `request_id` (from
-  `X-Request-ID` if supplied, else generated, echoed in the response). Each reservation
-  outcome is logged with user, show, seats and outcome:
-  `docker compose logs -f app`
+**Metrics** at `/actuator/prometheus`:
+
+| Metric | Meaning |
+|---|---|
+| `reservations_confirmed_total` | New reservations, counted after commit |
+| `reservations_cancelled_total` | Cancellations, counted after commit |
+| `reservations_declined_total{reason}` | `seat_taken`, `per_user_limit`, `key_reused`, `idempotent_replay` (and `not_found`, `invalid_request` when raised inside the reserve transaction) |
+| `seats{show,status}` | Seats per show and status, read from the database at scrape time, so it matches `GET /shows/{id}` |
+| `http_server_requests_seconds` | Request count and latency by route and status (Spring built-in) |
+| `hikaricp_connections_active` / `_pending` | Connection pool use; `pending` rising means requests are queueing for the database |
+
+**Logs** are JSON lines (ECS format) on stdout. Every line of a request carries `request_id`:
+your `X-Request-ID` header if it matches `[A-Za-z0-9._-]{1,64}`, otherwise a generated UUID.
+The ID is echoed back in the response's `X-Request-ID`. Each request writes:
+- one access line: method, path, status, `duration_ms`
+- for reserve and cancel, one outcome line: `user_id`, `show_id`, `seats`, `outcome`, `reservation_id`
+
+```bash
+docker compose logs -f app                                     # follow live
+docker compose logs app | grep '"request_id":"<id>"'           # one request, end to end
+docker compose logs -f app | jq -c '{t:."@timestamp", id:.request_id, msg:.message}'   # compact
+```
 
 ## Configuration
 
 | Variable | Default | |
 |---|---|---|
-| `SPRING_DATASOURCE_URL` | `jdbc:postgresql://localhost:5433/seats` | Set by compose to the `db` service |
-| `SPRING_DATASOURCE_USERNAME` / `_PASSWORD` | `seats` / `seats` | |
-| `ADMIN_TOKEN` | `dev-admin-token` | **Set a real secret outside local dev** |
-| `JWT_SECRET` | dev value | **Set a real secret (32+ bytes) outside local dev** |
-| `DB_POOL_SIZE` | `20` | Hikari pool size |
+| `SPRING_DATASOURCE_URL` | `jdbc:postgresql://localhost:5433/seats` | Compose sets it to the `db` service |
+| `SPRING_DATASOURCE_USERNAME` / `SPRING_DATASOURCE_PASSWORD` | `seats` / `seats` | |
+| `ADMIN_TOKEN` | `dev-admin-token` | **Set a real secret anywhere but local dev** |
+| `JWT_SECRET` | dev value | **Set a real secret (32+ bytes) anywhere but local dev** |
+| `DB_POOL_SIZE` | `20` | Hikari pool size; the real cap on concurrent database work |
+
+The schema is applied automatically on startup by Flyway (`src/main/resources/db/migration`).
+
+## Project layout
+
+```
+src/main/java/com/example/seats/
+  controller/   HTTP endpoints; read the user from the JWT
+  service/      transactions: reserve, cancel, show creation, tokens; metrics and outcome logs
+  repository/   all SQL (row locks, ON CONFLICT, conditional updates)
+  model/        records for rows, requests and responses
+  exception/    domain declines and the error-to-HTTP mapping
+  config/       security, JWT, request-id filter, readiness check
+src/main/resources/db/migration/   Flyway schema
+src/test/java/                     integration and concurrency tests
+burst/Burst.java, burst.sh         load test
+```

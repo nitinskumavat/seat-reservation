@@ -1,6 +1,7 @@
 # Seat Reservation — Design
 
-Status: agreed design, pre-implementation. Deployment is deferred; local (Docker Compose) first.
+Status: implemented and tested locally (Docker Compose). Deployment is pending.
+This is the reference for how the service works; [README.md](README.md) covers running it.
 
 ## Decisions
 
@@ -13,6 +14,7 @@ Status: agreed design, pre-implementation. Deployment is deferred; local (Docker
 | Auth | HS256 JWT, `sub` = user id. Demo `POST /auth/token` mints a token for any user id and upserts the user. Admin routes use an `X-Admin-Token` header matching `ADMIN_TOKEN` (separate from `Authorization: Bearer`, which the JWT filter owns). Any `user_id` in a request body is ignored |
 | Concurrency | Virtual threads (`spring.threads.virtual.enabled=true`); Hikari pool is the real bound |
 | Money | `bigint` paise, never floating point |
+| API conventions | snake_case JSON; errors are `{reason, message}`; seats listed in string order (`A12` before `A2`) |
 
 ## Schema
 
@@ -66,30 +68,39 @@ CREATE TABLE user_show_counts (
 
 ## Reserve — `POST /shows/{id}/reserve`
 
-Request: `{ "seats": ["A12"], "idempotency_key": "…" }` or the key in an `Idempotency-Key` header (required; if both are present they must match, else 400).
+Request: `{ "seats": ["A12"], "idempotency_key": "…" }`. The key may instead go in an `Idempotency-Key` header. It is required and must be 1–128 characters; if both are sent they must match (else 400).
 
-Validation: seats non-empty and no duplicates (400); show exists (404). A request for more seats than `per_user_limit` fails the counter step (409 `per_user_limit`). An unknown seat label is detected when locking (404, rolled back).
+Validation:
+- Seats must be non-empty and unique (400).
+- The show must exist (404).
+- Asking for more seats than `per_user_limit` fails at the counter step (409 `per_user_limit`).
+- An unknown seat label is detected while locking (404, rolled back).
 
 One transaction, READ COMMITTED. **Lock order is always: idempotency key → user counter → seats sorted by label.**
 
 ```
-hash = sha256(show_id + sorted(seats))
+seats = sorted(request.seats); hash = sha256(show_id + seats)
 BEGIN
- 1. INSERT INTO reservations (...) ON CONFLICT (user_id, idempotency_key) DO NOTHING RETURNING id
-    no row → ROLLBACK; load existing reservation
-             same hash      → 201, original reservation   (metric: idempotent_replay)
-             different hash → 409 key_reused
- 2. INSERT INTO user_show_counts ... ON CONFLICT DO NOTHING;
+ 0. INSERT INTO users (id) VALUES ($u) ON CONFLICT DO NOTHING
+      -- a valid token can outlive a database reset; keeps the foreign keys satisfied
+ 1. INSERT INTO reservations (...) ON CONFLICT (user_id, idempotency_key) DO NOTHING
+    0 rows inserted → load the existing reservation for (user, key)
+        same hash      → COMMIT, 201 with the original reservation   (metric: idempotent_replay)
+        different hash → ROLLBACK, 409 key_reused
+ 2. INSERT INTO user_show_counts ... VALUES ($u, $s, 0) ON CONFLICT DO NOTHING;
     UPDATE user_show_counts SET seat_count = seat_count + n
       WHERE user_id=$u AND show_id=$s AND seat_count + n <= per_user_limit
     0 rows → ROLLBACK, 409 per_user_limit
  3. SELECT label, status FROM seats
       WHERE show_id=$s AND label = ANY($seats) ORDER BY label FOR UPDATE
-    any status ≠ 'available' → ROLLBACK, 409 seat_taken
+    fewer rows than requested       → ROLLBACK, 404 not_found
+    any status ≠ 'available'        → ROLLBACK, 409 seat_taken
  4. UPDATE seats SET status='confirmed', reservation_id=$r, user_id=$u
       WHERE show_id=$s AND label = ANY($seats)
 COMMIT → 201
 ```
+
+Code: `ReservationService.reserve`, with the SQL in `repository/`.
 
 Why it is race-free:
 - **No double-sell:** `FOR UPDATE` serializes contenders per seat; a waiter re-reads the latest committed row after acquiring the lock (READ COMMITTED), sees `confirmed`, and declines. There is no read-then-write gap.
@@ -125,19 +136,23 @@ Why cases 8–10 behave this way:
 
 ## Cancel — `POST /reservations/{id}/cancel`
 
+Lock order: reservation → user counter → seats by label (the same counter → seats order as reserve).
+
 ```
 BEGIN
  SELECT * FROM reservations WHERE id=$r AND user_id=$token_user FOR UPDATE
    not found         → 404 (does not reveal other users' reservations)
    already cancelled → 200, cancelled reservation (idempotent)
  UPDATE user_show_counts SET seat_count = seat_count - n WHERE user_id=$u AND show_id=$s
+ SELECT ... FROM seats WHERE show_id=$s AND label = ANY($seats) ORDER BY label FOR UPDATE
  UPDATE seats SET status='available', reservation_id=NULL, user_id=NULL
    WHERE show_id=$s AND label = ANY($seats) AND reservation_id=$r
  UPDATE reservations SET status='cancelled' WHERE id=$r
-COMMIT
+COMMIT → 200
 ```
 
-The `reservation_id = $r` guard means a cancel can never release a seat now owned by someone else.
+- **No stale release:** the `reservation_id = $r` guard means a cancel can never release a seat that is now someone else's.
+- **Explicit seat lock:** without it, the release `UPDATE` would lock rows in whatever order the query plan scans them. That could deadlock against a reserve holding the same seats in label order. Today Postgres happens to scan in label order, so the explicit lock guarantees what the plan only does by chance.
 
 ## Other endpoints
 
@@ -154,28 +169,32 @@ The `reservation_id = $r` guard means a cancel can never release a seat now owne
 
 | Status | When |
 |---|---|
-| 400 | Validation failure, key header/body mismatch |
+| 400 | Malformed JSON, validation failure, duplicate seats, missing key, key header/body mismatch |
 | 401 / 403 | Missing/invalid token / non-admin on admin route |
 | 404 | Unknown show, unknown seat label, reservation not owned by caller |
 | 409 | `seat_taken`, `per_user_limit`, `key_reused` — body carries `reason` |
 
-Zero 5xx is a requirement: every domain outcome maps to 4xx.
+Every domain outcome maps to a 4xx, so the burst produces zero 5xx. A 5xx happens only when the database is unreachable, or when a request waits longer than the 30s pool timeout for a connection.
 
 ## Observability
 
 - `reservations_confirmed_total`, `reservations_cancelled_total` (counters, incremented after commit only)
-- `reservations_declined_total{reason=seat_taken|per_user_limit|idempotent_replay|key_reused|not_found|invalid_request}` (counter)
+- `reservations_declined_total{reason}` (counter): `seat_taken`, `per_user_limit`, `key_reused`, `idempotent_replay`, plus `not_found` / `invalid_request` when raised inside the reserve transaction (request-shape errors rejected by the controller are not counted)
 - `seats{show,status}` (gauge, read from DB at scrape time so it reconciles with the API)
-- `http_server_requests_seconds` (Spring's built-in latency metrics)
+- `http_server_requests_seconds` (Spring's built-in latency metrics), `hikaricp_connections_active` / `_pending` (pool use)
 - Structured JSON logs (ECS). `X-Request-ID` is accepted if it matches `[A-Za-z0-9._-]{1,64}`, otherwise generated; it is put in the MDC and echoed in the response. One access line per request plus one outcome line per reservation (user, show, seats, outcome, reservation id).
 
-## Risks
+## Risks and what was measured
 
-- **Connection pool saturation under the burst:** virtual threads remove the Tomcat thread cap, so requests queue on Hikari. A pool timeout becomes a 5xx. Keep transactions short, tune pool timeout, consider a semaphore in front of reserve. Measure with the burst script.
-- **Virtual thread pinning on Java 21:** `synchronized` pins carriers (fixed in JDK 24). Current HikariCP and pgjdbc avoid `synchronized` on hot paths; watch for it under load.
-- **Hot-seat lock queue:** 500 waiters on one row lock; each holds it for milliseconds. Verify with the hot-seat test.
+| Risk | Status |
+|---|---|
+| **Pool saturation.** Virtual threads remove the Tomcat thread cap, so requests queue on Hikari (20 connections); a wait past 30s becomes a 5xx | Local burst: ~22k requests at 500 in flight (p99 545 ms) and ~33k at 2,000 in flight (p99 1.8 s), zero 5xx. **Not yet measured on deployed hardware.** |
+| **Virtual-thread pinning on Java 21.** `synchronized` pins carrier threads (fixed in JDK 24) | Not observed under the local burst; current HikariCP and pgjdbc avoid `synchronized` on hot paths |
+| **Hot-seat lock queue.** Hundreds of waiters on one row lock | 500- and 1,000-user storms resolve in about 0.6 s with exactly one winner |
 
 ## Build plan (one commit per step)
+
+Steps 1–9 and 11 are done, one commit each.
 
 1. Scaffold: Spring Boot app, Dockerfile, docker-compose with Postgres, liveness/readiness → verify: `docker compose up` healthy; readiness 503 with Postgres stopped
 2. Flyway schema, `POST /shows`, `GET /shows/{id}`, admin auth → verify: invariant test
@@ -186,9 +205,9 @@ Zero 5xx is a requirement: every domain outcome maps to 4xx.
 7. Cancel → verify: owner-only; seat re-bookable; cannot free another user's seat
 8. Metrics + structured logs → verify: `/actuator/prometheus` reconciles with `GET /shows`
 9. Burst script (`./burst.sh <BASE_URL>`, single-file Java on the JDK 21 the project already needs; no extra dependencies) → verify: passes against local compose
-10. Deploy (deferred; Render + Neon proposed)
+10. Deploy (**pending**; Render + Neon proposed), then run the burst against the live URL
 11. README + WRITEUP.md
 
 ## Open
 
-- Deploy target (proposed: Render + Neon; deferred)
+- Deploy target (proposed: Render + Neon) and a live-log recording under load (see README)
