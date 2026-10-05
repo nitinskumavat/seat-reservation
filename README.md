@@ -170,9 +170,8 @@ It exits `1` on any violation, including any 5xx.
 | `CONCURRENCY` | `500` | Requests in flight at once |
 | `HOT_STORM` | `500` | Users in the hot-seat storm |
 
-**Notes**
-- Each run creates three new shows and new users, and leaves them in place.
-- The metrics comparison assumes nothing else is hitting the service during the run.
+Each run creates three new shows and new users and leaves them in place. The metrics comparison
+assumes nothing else is hitting the service during the run.
 
 Sample run on a laptop (local Docker). Throughput varies between runs, roughly 1.3k–3k req/s;
 the correctness checks pass every time.
@@ -228,7 +227,7 @@ running. The concurrency tests cover:
 |---|---|
 | `reservations_confirmed_total` | New reservations, counted after commit |
 | `reservations_cancelled_total` | Cancellations, counted after commit |
-| `reservations_declined_total{reason}` | `seat_taken`, `per_user_limit`, `key_reused`, `idempotent_replay` (and `not_found`, `invalid_request` when raised inside the reserve transaction) |
+| `reservations_declined_total{reason}` | `seat_taken`, `per_user_limit`, `key_reused`, `idempotent_replay` (also `not_found`, `invalid_request` when raised inside the reserve transaction) |
 | `seats{show,status}` | Seats per show and status, read from the database at scrape time with one grouped query (cached up to 1s), so it matches `GET /shows/{id}` |
 | `http_server_requests_seconds` | Request count and latency by route and status (Spring built-in) |
 | `hikaricp_connections_active` / `_pending` | Connection pool use; `pending` rising means requests are queueing for the database |

@@ -23,6 +23,10 @@ latest committed version for the waiter (READ COMMITTED re-check). The waiter th
 fail. The hot seat gets several winners, and in the overlap test nine requests "succeed" for
 18 seats when the show has only 6.
 
+**Waiters queue; they don't give up.** I deliberately avoided `NOWAIT`. If the lock holder
+rolls back (say it hit its per-user limit), a waiter must still be able to win the seat;
+failing fast would let a hot seat end with zero winners.
+
 **No deadlocks for multi-seat requests.** Every transaction locks seats in label order, so two
 requests for `[A1, A2]` and `[A2, A1]` cannot each hold one seat and wait for the other. Cancel
 locks the same rows in the same order before releasing them. Across a transaction, locks are
@@ -71,10 +75,15 @@ nothing changes. The hash covers the show, so reusing a key on another show is a
 Seats are sorted before hashing, so `[A2, A1]` replays `[A1, A2]`.
 
 **Deliberate choices.**
-- Declines are not stored against the key: a retry after `seat_taken` is re-evaluated and can
-  succeed if the seat was freed.
-- A replay after cancel returns the reservation as `cancelled` and does not re-book it.
-- Keys are scoped per user.
+- **Declines are not stored against the key.** A retry after `seat_taken` is re-evaluated and
+  can succeed if the seat was freed. Exactly-once is about reservations that were made, and a
+  decline made nothing. For the same reason, if a concurrent duplicate's first attempt rolls
+  back, the duplicate proceeds as a fresh request.
+- **A replay after cancel returns the reservation as `cancelled`** and never re-books it. A
+  retry must not silently undo a cancel.
+- **Keys are scoped per user**, so one user's key can never collide with or reveal another's.
+
+Every case, including the concurrent ones, is tabulated in [DESIGN.md](DESIGN.md#idempotency-cases).
 
 ## Holds and expiry
 
@@ -114,15 +123,7 @@ worse than a few seconds of "try again".
 
 ## Observability: what pages me at 2am
 
-Signals available today:
-- `reservations_confirmed_total`
-- `reservations_cancelled_total`
-- `reservations_declined_total{reason}`
-- `seats{show,status}` (read from the database at scrape time)
-- `http_server_requests_seconds`
-- `hikaricp_connections_pending` / `_active`
-- JSON logs with `request_id` and a per-reservation outcome line
-- a Grafana dashboard over all of these (`docker compose --profile monitoring up`)
+The metrics, logs and Grafana dashboard are listed in [README.md → Observability](README.md#observability).
 
 **Page:**
 - **Any 5xx on the reserve route** (`http_server_requests_seconds_count{uri=".../reserve",outcome="SERVER_ERROR"}` rate > 0). Declines are 4xx by design, so a 5xx is always a bug or an outage.
@@ -168,9 +169,9 @@ steps 4–11 were then implemented back-to-back, each committed with its own tes
   the seat gauges ran one query per show, and decline counters that first appeared already at
   N, which hid the first burst from Prometheus' `increase()`.
 
-It also ran mutation checks to confirm the tests actually detect a broken lock. One of them
-showed the cancel deadlock test does not catch the missing lock, because Postgres happens to
-scan in label order; the lock is kept so the order is guaranteed rather than incidental.
+Claude also ran mutation checks (deliberately breaking the code) to confirm the tests catch a
+missing lock. One showed the cancel deadlock test doesn't, because Postgres happens to scan in
+label order. The lock stays, so the order is guaranteed rather than incidental.
 
 ## What I'd do next
 
