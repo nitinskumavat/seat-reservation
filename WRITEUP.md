@@ -34,20 +34,6 @@ always taken in this order: idempotency key → the user's per-show counter → 
 
 **Partial requests are all-or-nothing.** If any requested seat is taken, nothing is reserved.
 
-**Per-user limit.** A counter row per (user, show) is updated conditionally:
-
-```sql
-UPDATE user_show_counts SET seat_count = seat_count + :n
-WHERE user_id = :u AND show_id = :s AND seat_count + :n <= :limit
-```
-
-Zero rows updated means `409 per_user_limit`. The row lock queues one user's parallel requests,
-so 10 parallel reserves on a limit-4 show yield exactly 4.
-
-**Identity** comes only from the JWT subject. The request body has no user field. A spoofed
-`user_id` is ignored, and cancel looks up reservations by `(id, user_id)`, so someone else's
-reservation returns 404.
-
 ## Idempotency
 
 **Where the key lives.** It lives in the `reservations` row itself, under
@@ -74,14 +60,10 @@ its key, or the reverse.
 nothing changes. The hash covers the show, so reusing a key on another show is also rejected.
 Seats are sorted before hashing, so `[A2, A1]` replays `[A1, A2]`.
 
-**Deliberate choices.**
-- **Declines are not stored against the key.** A retry after `seat_taken` is re-evaluated and
-  can succeed if the seat was freed. Exactly-once is about reservations that were made, and a
-  decline made nothing. For the same reason, if a concurrent duplicate's first attempt rolls
-  back, the duplicate proceeds as a fresh request.
-- **A replay after cancel returns the reservation as `cancelled`** and never re-books it. A
-  retry must not silently undo a cancel.
-- **Keys are scoped per user**, so one user's key can never collide with or reveal another's.
+**Declines are not stored against the key.** A retry after `seat_taken` is re-evaluated and can
+succeed if the seat was freed. Exactly-once is about reservations that were made, and a decline
+made nothing. For the same reason, if a concurrent duplicate's first attempt rolls back, the
+duplicate proceeds as a fresh request.
 
 Every case, including the concurrent ones, is tabulated in [DESIGN.md](DESIGN.md#idempotency-cases).
 
