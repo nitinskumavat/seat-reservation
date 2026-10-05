@@ -1,7 +1,7 @@
 # Production stack for a single VPS (app + Postgres on one machine), served over http://<ip>:8080.
 #   cp .env.example .env   # then fill in the secrets
 #   docker compose -f compose.prod.yaml up -d --build
-# Optional dashboard on http://<ip>:3000:
+# Optional dashboard on http://<ip>:3000 and live logs on http://<ip>:8888:
 #   docker compose -f compose.prod.yaml --profile monitoring up -d
 name: seat-reservation-prod
 
@@ -81,6 +81,35 @@ services:
       - "3000:3000"
     depends_on:
       - prometheus
+    logging: *logging
+
+  # Read-only gate to the Docker API for Dozzle: only GET calls for containers, logs, events,
+  # info and version get through; start/stop/exec/create are refused. Not published.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:v0.5.0
+    profiles: [monitoring]
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      INFO: 1
+      POST: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    logging: *logging
+
+  # Public, read-only live view of the app's logs on http://<ip>:8888.
+  dozzle:
+    image: amir20/dozzle:v11.3.0
+    profiles: [monitoring]
+    restart: unless-stopped
+    environment:
+      DOCKER_HOST: tcp://docker-proxy:2375
+      DOZZLE_FILTER: name=seat-reservation-prod-app
+      DOZZLE_NO_ANALYTICS: "true"
+    ports:
+      - "8888:8080"
+    depends_on:
+      - docker-proxy
     logging: *logging
 
 volumes:
