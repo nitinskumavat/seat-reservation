@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.example.seats.exception.BadRequestException;
+import com.example.seats.exception.KeyReusedException;
 import com.example.seats.exception.NotFoundException;
 import com.example.seats.exception.SeatTakenException;
 import com.example.seats.model.Reservation;
@@ -59,7 +60,15 @@ public class ReservationService {
 		Reservation reservation = new Reservation(UUID.randomUUID(), showId, userId, labels,
 				Math.multiplyExact(show.pricePaise(), labels.size()), ReservationStatus.CONFIRMED, key,
 				requestHash(showId, labels));
-		reservations.insert(reservation);
+		if (!reservations.insertIfAbsent(reservation)) {
+			// The key already belongs to a committed reservation: replay it, or reject a changed request.
+			Reservation existing = reservations.findByUserAndKey(userId, key)
+				.orElseThrow(() -> new IllegalStateException("conflicting reservation not visible"));
+			if (!existing.requestHash().equals(reservation.requestHash())) {
+				throw new KeyReusedException();
+			}
+			return ReservationResponse.of(existing);
+		}
 
 		List<Seat> locked = seats.lockForUpdate(showId, labels);
 		if (locked.size() != labels.size()) {
