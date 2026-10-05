@@ -14,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.example.seats.exception.BadRequestException;
 import com.example.seats.exception.KeyReusedException;
 import com.example.seats.exception.NotFoundException;
+import com.example.seats.exception.PerUserLimitException;
 import com.example.seats.exception.SeatTakenException;
 import com.example.seats.model.Reservation;
 import com.example.seats.model.ReservationResponse;
@@ -25,6 +26,7 @@ import com.example.seats.repository.ReservationRepository;
 import com.example.seats.repository.SeatRepository;
 import com.example.seats.repository.ShowRepository;
 import com.example.seats.repository.UserRepository;
+import com.example.seats.repository.UserShowCountRepository;
 
 @Service
 public class ReservationService {
@@ -33,18 +35,21 @@ public class ReservationService {
 	private final SeatRepository seats;
 	private final ReservationRepository reservations;
 	private final UserRepository users;
+	private final UserShowCountRepository userShowCounts;
 
 	public ReservationService(ShowRepository shows, SeatRepository seats, ReservationRepository reservations,
-			UserRepository users) {
+			UserRepository users, UserShowCountRepository userShowCounts) {
 		this.shows = shows;
 		this.seats = seats;
 		this.reservations = reservations;
 		this.users = users;
+		this.userShowCounts = userShowCounts;
 	}
 
 	/**
 	 * All-or-nothing: either every requested seat is confirmed to this user, or the transaction
-	 * rolls back and nothing changes.
+	 * rolls back and nothing changes. Locks are always taken in the same order: idempotency key,
+	 * then the user's counter for the show, then seats by label.
 	 */
 	@Transactional
 	public ReservationResponse reserve(String userId, UUID showId, List<String> requestedSeats, String key) {
@@ -68,6 +73,10 @@ public class ReservationService {
 				throw new KeyReusedException();
 			}
 			return ReservationResponse.of(existing);
+		}
+
+		if (!userShowCounts.tryAdd(userId, showId, labels.size(), show.perUserLimit())) {
+			throw new PerUserLimitException(show.perUserLimit());
 		}
 
 		List<Seat> locked = seats.lockForUpdate(showId, labels);

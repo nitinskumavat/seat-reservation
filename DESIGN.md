@@ -68,7 +68,7 @@ CREATE TABLE user_show_counts (
 
 Request: `{ "seats": ["A12"], "idempotency_key": "…" }` or the key in an `Idempotency-Key` header (required; if both are present they must match, else 400).
 
-Validation before the transaction: seats non-empty, no duplicates, count ≤ `per_user_limit`, all labels exist in the show → else 400 / 404.
+Validation: seats non-empty and no duplicates (400); show exists (404). A request for more seats than `per_user_limit` fails the counter step (409 `per_user_limit`). An unknown seat label is detected when locking (404, rolled back).
 
 One transaction, READ COMMITTED. **Lock order is always: idempotency key → user counter → seats sorted by label.**
 
