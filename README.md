@@ -15,7 +15,12 @@ Java 21 · Spring Boot 4.1 · Postgres 17 · plain SQL via `JdbcTemplate`
 | [WRITEUP.md](WRITEUP.md) | Why it is race-free, idempotency, holds, consistency, alerting, AI usage, next steps |
 | [DEPLOY.md](DEPLOY.md) | Running it on a VPS with `compose.prod.yaml` |
 
-**Live URL:** not deployed yet. **Live logs recording:** to be added after deployment.
+**Live:** API `http://187.126.119.122:8080` · Dashboard `http://187.126.119.122:3000` (read-only) ·
+Live logs recording: to be added.
+
+Run the burst against it with the admin token shared separately:
+`ADMIN_TOKEN=<token> ./burst.sh http://187.126.119.122:8080`. Measured from a laptop over the internet
+(2 vCPU / 8 GB VPS): ~22k requests at 767 req/s, p99 2.6 s, zero 5xx, all checks pass.
 
 ## How each correctness requirement is met
 

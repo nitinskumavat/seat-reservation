@@ -1,6 +1,6 @@
 # Seat Reservation — Design
 
-Status: implemented and tested locally; deployment pending.
+Status: implemented, tested, and deployed on a 2 vCPU / 8 GB VPS (see [DEPLOY.md](DEPLOY.md)).
 This doc is the exact mechanics. [README.md](README.md) covers running and using the service (endpoints, status codes,
 metrics, logs); [WRITEUP.md](WRITEUP.md) covers the reasoning and trade-offs.
 
@@ -156,10 +156,10 @@ COMMIT → 200
 
 | Risk | Status |
 |---|---|
-| **Pool saturation.** Virtual threads remove the Tomcat thread cap, so requests queue on Hikari (20 connections); a wait past 30s becomes a 5xx | Local burst: ~22k requests at 500 in flight (p99 545 ms) and ~33k at 2,000 in flight (p99 1.8 s), zero 5xx; laptop throughput varies between runs (1.3k–3k req/s). **Not yet measured on deployed hardware.** |
+| **Pool saturation.** Virtual threads remove the Tomcat thread cap, so requests queue on Hikari (20 connections); a wait past 30s becomes a 5xx | Local burst: ~22k requests at 500 in flight (p99 545 ms) and ~33k at 2,000 in flight (p99 1.8 s), zero 5xx; laptop throughput varies between runs (1.3k–3k req/s). **Deployed** (2 vCPU / 8 GB, burst from a laptop over the internet): ~22k requests at 767 req/s, p99 2.6 s, zero 5xx. A pool of 10 was slower (640 req/s, p99 4.1 s), so it stays at 20. |
 | **Virtual-thread pinning on Java 21.** `synchronized` pins carrier threads (fixed in JDK 24) | Not observed under the local burst; current HikariCP and pgjdbc avoid `synchronized` on hot paths |
 | **Hot-seat lock queue.** Hundreds of waiters on one row lock | 500- and 1,000-user storms resolve in about 0.6 s with exactly one winner |
 
 ## Build history
 
-Built one step per commit (scaffold → schema → auth → reserve → idempotency → limit → cancel → observability → burst → docs), each verified by its own tests before the next; an optional dashboard followed. See `git log`. Remaining: deployment.
+Built one step per commit (scaffold → schema → auth → reserve → idempotency → limit → cancel → observability → burst → docs), each verified by its own tests before the next; an optional dashboard followed. See `git log`. Then deployed with `compose.prod.yaml`.

@@ -146,7 +146,7 @@ I built this with Claude Code (Claude Opus 5.5) as a pair.
 - **Release model:** confirm plus explicit cancel, over time-boxed holds, after asking for the trade-off to be explained.
 - **Schema:** adding a `users` table, and using Postgres enums for status instead of text with CHECK constraints.
 - **Code layout:** layered controller/service/repository structure.
-- **Scope:** running locally first and deferring deployment.
+- **Scope and deployment:** running locally first, then deploying to my own VPS over plain HTTP on an IP.
 - **Observability extra:** adding an optional Prometheus + Grafana dashboard.
 - **Review:** asking for the docs to be checked for clarity, which found a walkthrough that failed on a second run.
 
@@ -175,8 +175,8 @@ label order. The lock stays, so the order is guaranteed rather than incidental.
 
 ## What I'd do next
 
-1. **Deploy** and run `./burst.sh` against the live URL, sizing the instance and pool from the
-   result.
+1. **HTTPS and a domain.** The live service is plain HTTP on an IP; a reverse proxy such as
+   Caddy would add TLS with no app changes.
 2. **Return 503 with `Retry-After`** instead of a 500 when the pool times out, and add
    load-shedding (a bounded in-flight limit on reserve) so overload degrades into fast,
    retryable responses.
