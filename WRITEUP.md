@@ -148,7 +148,6 @@ I built this with Claude Code (Claude Opus 5.5) as a pair.
 - **Code layout:** layered controller/service/repository structure.
 - **Scope and deployment:** running locally first, then deploying to my own VPS over plain HTTP on an IP.
 - **Observability extra:** adding an optional Prometheus + Grafana dashboard.
-- **Review:** asking for the docs to be checked for clarity, which found a walkthrough that failed on a second run.
 
 **What Claude proposed and I accepted:**
 - The core mechanisms: `FOR UPDATE` in label order, the conditional counter update, and claiming the idempotency key with `ON CONFLICT` inside the same transaction.
