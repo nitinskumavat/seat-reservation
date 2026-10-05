@@ -10,7 +10,7 @@ Status: agreed design, pre-implementation. Deployment is deferred; local (Docker
 | Datastore | Single Postgres; plain SQL via `JdbcTemplate` (no JPA — locking must be visible); Flyway migrations |
 | Multi-seat requests | **All-or-nothing**: any requested seat unavailable → whole request 409 |
 | Release model | **Confirm on reserve + explicit cancel** (`POST /reservations/{id}/cancel`, owner only). No timed holds; `held` exists in the schema for a later extension, so `held` count is always 0 today |
-| Auth | HS256 JWT, `sub` = user id. Demo `POST /auth/token` mints a token for any user id and upserts the user. Admin routes use `ADMIN_TOKEN`. Any `user_id` in a request body is ignored |
+| Auth | HS256 JWT, `sub` = user id. Demo `POST /auth/token` mints a token for any user id and upserts the user. Admin routes use an `X-Admin-Token` header matching `ADMIN_TOKEN` (separate from `Authorization: Bearer`, which the JWT filter owns). Any `user_id` in a request body is ignored |
 | Concurrency | Virtual threads (`spring.threads.virtual.enabled=true`); Hikari pool is the real bound |
 | Money | `bigint` paise, never floating point |
 
@@ -144,7 +144,7 @@ The `reservation_id = $r` guard means a cancel can never release a seat now owne
 | Endpoint | Auth | Notes |
 |---|---|---|
 | `POST /auth/token` `{user_id}` | none | Demo auth: upserts user, returns JWT (24h). Production would use a real IdP; reservation code only reads `sub`. |
-| `POST /shows` | admin | `{name, seats[], price_paise, per_user_limit?}` → show with every seat `available` |
+| `POST /shows` | admin (`X-Admin-Token`) | `{name, seats[], price_paise, per_user_limit?}` → show with every seat `available` |
 | `GET /shows/{id}` | none | Per-seat status + counts from one query, so `available + held + confirmed == total_seats` by construction |
 | `/actuator/health/liveness` | none | No dependency checks |
 | `/actuator/health/readiness` | none | Includes `db`; 503 when Postgres unreachable (fails closed) |
