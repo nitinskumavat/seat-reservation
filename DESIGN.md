@@ -131,7 +131,7 @@ Keys are scoped per user: `UNIQUE (user_id, idempotency_key)`. The hash covers `
 
 Why cases 8–10 behave this way:
 - **8:** the first request never succeeded, so the key was never "used"; letting the retry proceed is correct.
-- **9:** storing declines would pin a retry to "seat taken" even after the seat frees up. The spec requires exactly-once for successful reservations only.
+- **9:** storing declines would pin a retry to "seat taken" even after the seat frees up. Exactly-once is about reservations that were made; a decline made nothing.
 - **10:** a retry must never silently re-book a seat the user cancelled.
 
 ## Cancel — `POST /reservations/{id}/cancel`
@@ -170,7 +170,7 @@ COMMIT → 200
 | Status | When |
 |---|---|
 | 400 | Malformed JSON, validation failure, duplicate seats, missing key, key header/body mismatch |
-| 401 / 403 | Missing/invalid token / non-admin on admin route |
+| 401 / 403 | Missing, invalid or expired token, or wrong admin token / user token on an admin route |
 | 404 | Unknown show, unknown seat label, reservation not owned by caller |
 | 409 | `seat_taken`, `per_user_limit`, `key_reused` — body carries `reason` |
 
@@ -179,23 +179,23 @@ Every domain outcome maps to a 4xx, so the burst produces zero 5xx. A 5xx happen
 ## Observability
 
 - `reservations_confirmed_total`, `reservations_cancelled_total` (counters, incremented after commit only)
-- `reservations_declined_total{reason}` (counter): `seat_taken`, `per_user_limit`, `key_reused`, `idempotent_replay`, plus `not_found` / `invalid_request` when raised inside the reserve transaction (request-shape errors rejected by the controller are not counted)
-- `seats{show,status}` (gauge): read from the DB at scrape time so it reconciles with the API. One grouped query serves all shows, cached up to 1s, so a scrape uses one pool connection however many shows exist. Decline counters for the main reasons are created at 0 on startup, so Prometheus' `increase()` sees the first burst.
-- Optional dashboard: `docker compose --profile monitoring up` starts Prometheus (2s scrape) and Grafana with a provisioned dashboard (`monitoring/`).
-- `http_server_requests_seconds` (Spring's built-in latency metrics), `hikaricp_connections_active` / `_pending` (pool use)
+- `reservations_declined_total{reason}` (counter): `seat_taken`, `per_user_limit`, `key_reused`, `idempotent_replay`, plus `not_found` / `invalid_request` when raised inside the reserve transaction (request-shape errors rejected by the controller are not counted). The four main reasons are created at 0 on startup; otherwise a series that first appears already at N looks like no change to Prometheus' `increase()`.
+- `seats{show,status}` (gauge): read from the DB at scrape time so it reconciles with the API. One grouped query serves all shows, cached up to 1s, so a scrape uses one pool connection however many shows exist.
+- `http_server_requests_seconds` (Spring's built-in latency metrics, with histogram buckets for percentiles), `hikaricp_connections_active` / `_pending` (pool use)
 - Structured JSON logs (ECS). `X-Request-ID` is accepted if it matches `[A-Za-z0-9._-]{1,64}`, otherwise generated; it is put in the MDC and echoed in the response. One access line per request plus one outcome line per reservation (user, show, seats, outcome, reservation id).
+- Optional dashboard: `docker compose --profile monitoring up` starts Prometheus (2s scrape) and Grafana with a provisioned dashboard (`monitoring/`).
 
 ## Risks and what was measured
 
 | Risk | Status |
 |---|---|
-| **Pool saturation.** Virtual threads remove the Tomcat thread cap, so requests queue on Hikari (20 connections); a wait past 30s becomes a 5xx | Local burst: ~22k requests at 500 in flight (p99 545 ms) and ~33k at 2,000 in flight (p99 1.8 s), zero 5xx. **Not yet measured on deployed hardware.** |
+| **Pool saturation.** Virtual threads remove the Tomcat thread cap, so requests queue on Hikari (20 connections); a wait past 30s becomes a 5xx | Local burst: ~22k requests at 500 in flight (p99 545 ms) and ~33k at 2,000 in flight (p99 1.8 s), zero 5xx; laptop throughput varies between runs (1.3k–3k req/s). **Not yet measured on deployed hardware.** |
 | **Virtual-thread pinning on Java 21.** `synchronized` pins carrier threads (fixed in JDK 24) | Not observed under the local burst; current HikariCP and pgjdbc avoid `synchronized` on hot paths |
 | **Hot-seat lock queue.** Hundreds of waiters on one row lock | 500- and 1,000-user storms resolve in about 0.6 s with exactly one winner |
 
 ## Build plan (one commit per step)
 
-Steps 1–9 and 11 are done, one commit each.
+Steps 1–9 and 11 are done, one commit each. An optional Prometheus + Grafana dashboard was added afterwards.
 
 1. Scaffold: Spring Boot app, Dockerfile, docker-compose with Postgres, liveness/readiness → verify: `docker compose up` healthy; readiness 503 with Postgres stopped
 2. Flyway schema, `POST /shows`, `GET /shows/{id}`, admin auth → verify: invariant test

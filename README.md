@@ -16,10 +16,25 @@ Java 21 · Spring Boot 4.1 · Postgres 17 · plain SQL via `JdbcTemplate`
 
 **Live URL:** not deployed yet. **Live logs recording:** to be added after deployment.
 
+## How each correctness requirement is met
+
+| Requirement | Mechanism | Proven by |
+|---|---|---|
+| No seat confirmed to two users | Seats are row-locked (`SELECT … FOR UPDATE`) in label order inside one transaction; a waiter re-reads the row and sees it taken | `ReservationConcurrencyTest` (500 racers → 1 winner); burst phases 1–2 |
+| Zero 5xx | Every decline is a 4xx domain outcome (`409` with a `reason`) | Burst fails on any 5xx |
+| `available + held + confirmed == total_seats` | Seats change only inside transactions; `GET /shows/{id}` counts them in one query | Burst polls the show during the stampede |
+| Idempotent retries | The key is claimed with `INSERT … ON CONFLICT` in the same transaction as the seats; a stored request hash detects a changed body | `IdempotencyTest`; burst phases 2–3 |
+| Per-user limit under concurrency | Conditional update on a per-(user, show) counter row: `seat_count + n <= limit` | `PerUserLimitTest` (10 parallel on limit 4 → 4); burst phase 4 |
+| Identity from the token | The user is the JWT `sub`; body fields are ignored; cancel looks up `(id, user)` | `ReservationControllerTest`, `CancelTest`; burst phase 5 |
+
+The reasoning behind each mechanism is in [WRITEUP.md](WRITEUP.md); the exact transactions are in
+[DESIGN.md](DESIGN.md).
+
 ## Quick start
 
 Requires Docker with Compose v2. Ports `8080` (API) and `5433` (Postgres) must be free.
-Java 21 is needed only for the tests and the burst script.
+Java 21+ is needed only for the tests and the burst script. The first build takes a few minutes
+while Maven downloads dependencies.
 
 ```bash
 docker compose up --build -d
@@ -159,7 +174,8 @@ It exits `1` on any violation, including any 5xx.
 - Each run creates three new shows and new users, and leaves them in place.
 - The metrics comparison assumes nothing else is hitting the service during the run.
 
-Sample run on a laptop (local Docker):
+Sample run on a laptop (local Docker). Throughput varies between runs, roughly 1.3k–3k req/s;
+the correctness checks pass every time.
 
 ```
 phase 1  hot-seat storm     500 requests    0.6s  {201=1, 409 seat_taken=499}
@@ -236,7 +252,7 @@ profile, so the default `docker compose up` stays just the app and Postgres.
 
 ```bash
 docker compose --profile monitoring up -d --build
-open http://localhost:3000          # dashboard opens directly; no login needed to view
+# open http://localhost:3000 — the dashboard is the home page; no login needed to view
 ./burst.sh                          # watch it fill in
 docker compose --profile monitoring down
 ```

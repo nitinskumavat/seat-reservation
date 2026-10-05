@@ -146,7 +146,8 @@ I built this with Claude Code (Claude Opus 5.5) as a pair.
 - **Schema:** adding a `users` table, and using Postgres enums for status instead of text with CHECK constraints.
 - **Code layout:** layered controller/service/repository structure.
 - **Scope:** running locally first and deferring deployment.
-- **Repo hygiene:** which files stay out of the repo, and the commit identity.
+- **Observability extra:** adding an optional Prometheus + Grafana dashboard.
+- **Review:** asking for the docs to be checked for clarity, which found a walkthrough that failed on a second run.
 
 **What Claude proposed and I accepted:**
 - The core mechanisms: `FOR UPDATE` in label order, the conditional counter update, and claiming the idempotency key with `ON CONFLICT` inside the same transaction.
@@ -155,14 +156,17 @@ I built this with Claude Code (Claude Opus 5.5) as a pair.
 - The demo token endpoint.
 - `X-Admin-Token` instead of a bearer admin token, to avoid clashing with the JWT filter.
 
-**What Claude wrote:** all code, tests and the burst script. `DESIGN.md` was agreed before any
-code. I reviewed steps 1–3 as they landed; at my request, steps 4–11 were then implemented
-back-to-back, each committed with its own tests.
+**What Claude wrote:** all code, tests, the burst script, the dashboard and first drafts of the
+docs. `DESIGN.md` was agreed before any code. I reviewed steps 1–3 as they landed; at my request,
+steps 4–11 were then implemented back-to-back, each committed with its own tests. Later changes
+(the dashboard, doc fixes) were made one request at a time.
 
 **Issues Claude caught during implementation:**
-- A port clash with my local Postgres.
 - A 30s readiness timeout caused by the probe borrowing from the pool.
 - Cancel needing an explicit ordered lock to rule out deadlocks against concurrent reserves.
+- While checking every dashboard panel against a live burst: metric scrapes timing out because
+  the seat gauges ran one query per show, and decline counters that first appeared already at
+  N, which hid the first burst from Prometheus' `increase()`.
 
 It also ran mutation checks to confirm the tests actually detect a broken lock. One of them
 showed the cancel deadlock test does not catch the missing lock, because Postgres happens to
