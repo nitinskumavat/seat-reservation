@@ -49,6 +49,18 @@ public class SeatRepository {
 				""", reservationId, userId, showId, labels.toArray(String[]::new));
 	}
 
+	/**
+	 * Returns seats to available only while they still belong to this reservation, so releasing
+	 * an old reservation can never free a seat that is now someone else's. Callers lock the rows
+	 * first with {@link #lockForUpdate} to keep the label lock order.
+	 */
+	public void release(UUID showId, List<String> labels, UUID reservationId) {
+		jdbc.update("""
+				UPDATE seats SET status = 'available', reservation_id = NULL, user_id = NULL
+				WHERE show_id = ? AND label = ANY(?) AND reservation_id = ?
+				""", showId, labels.toArray(String[]::new), reservationId);
+	}
+
 	/** A single SELECT is one snapshot, so the statuses it returns are mutually consistent. */
 	public List<Seat> findByShow(UUID showId) {
 		return jdbc.query("SELECT label, status FROM seats WHERE show_id = ? ORDER BY label",

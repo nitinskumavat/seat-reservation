@@ -37,6 +37,11 @@ public class ReservationController {
 		return reservationService.reserve(jwt.getSubject(), showId, req.seats(), idempotencyKey(headerKey, req));
 	}
 
+	@PostMapping("/reservations/{reservationId}/cancel")
+	public ReservationResponse cancel(@PathVariable UUID reservationId, @AuthenticationPrincipal Jwt jwt) {
+		return reservationService.cancel(jwt.getSubject(), reservationId);
+	}
+
 	private static String idempotencyKey(String headerKey, ReserveRequest req) {
 		String bodyKey = req.idempotencyKey();
 		if (headerKey != null && bodyKey != null && !headerKey.equals(bodyKey)) {

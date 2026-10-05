@@ -90,6 +90,25 @@ public class ReservationService {
 		return ReservationResponse.of(reservation);
 	}
 
+	/**
+	 * Owner-only and idempotent: cancelling twice returns the cancelled reservation. Lock order
+	 * is reservation, then the user's counter, then seats by label.
+	 */
+	@Transactional
+	public ReservationResponse cancel(String userId, UUID reservationId) {
+		Reservation r = reservations.lockOwned(reservationId, userId)
+			.orElseThrow(() -> new NotFoundException("reservation not found"));
+		if (r.status() == ReservationStatus.CANCELLED) {
+			return ReservationResponse.of(r);
+		}
+		userShowCounts.subtract(userId, r.showId(), r.seats().size());
+		seats.lockForUpdate(r.showId(), r.seats());
+		seats.release(r.showId(), r.seats(), r.id());
+		reservations.markCancelled(r.id());
+		return new ReservationResponse(r.id(), r.showId(), r.userId(), r.seats(), r.amountPaise(),
+				ReservationStatus.CANCELLED);
+	}
+
 	/** Seats are sorted first, so the same seats in a different order hash the same. */
 	static String requestHash(UUID showId, List<String> sortedLabels) {
 		try {

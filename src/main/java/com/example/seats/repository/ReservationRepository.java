@@ -43,6 +43,19 @@ public class ReservationRepository {
 				ReservationRepository::map, userId, key).stream().findFirst();
 	}
 
+	/**
+	 * Row-locks the reservation if it belongs to the user. Someone else's reservation looks the
+	 * same as a missing one.
+	 */
+	public Optional<Reservation> lockOwned(UUID id, String userId) {
+		return jdbc.query("SELECT " + COLUMNS + " FROM reservations WHERE id = ? AND user_id = ? FOR UPDATE",
+				ReservationRepository::map, id, userId).stream().findFirst();
+	}
+
+	public void markCancelled(UUID id) {
+		jdbc.update("UPDATE reservations SET status = 'cancelled' WHERE id = ?", id);
+	}
+
 	private static Reservation map(ResultSet rs, int rowNum) throws SQLException {
 		return new Reservation(rs.getObject("id", UUID.class), rs.getObject("show_id", UUID.class),
 				rs.getString("user_id"), List.of((String[]) rs.getArray("seats").getArray()),

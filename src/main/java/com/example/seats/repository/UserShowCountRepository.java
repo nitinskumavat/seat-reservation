@@ -29,4 +29,9 @@ public class UserShowCountRepository {
 				WHERE user_id = ? AND show_id = ? AND seat_count + ? <= ?
 				""", n, userId, showId, n, limit) == 1;
 	}
+
+	public void subtract(String userId, UUID showId, int n) {
+		jdbc.update("UPDATE user_show_counts SET seat_count = seat_count - ? WHERE user_id = ? AND show_id = ?",
+				n, userId, showId);
+	}
 }
