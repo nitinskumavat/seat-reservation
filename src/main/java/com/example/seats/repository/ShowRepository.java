@@ -1,5 +1,6 @@
 package com.example.seats.repository;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -22,6 +23,10 @@ public class ShowRepository {
 				INSERT INTO shows (id, name, price_paise, per_user_limit, total_seats)
 				VALUES (?, ?, ?, ?, ?)
 				""", show.id(), show.name(), show.pricePaise(), show.perUserLimit(), show.totalSeats());
+	}
+
+	public List<UUID> findAllIds() {
+		return jdbc.queryForList("SELECT id FROM shows", UUID.class);
 	}
 
 	public Optional<Show> findById(UUID id) {

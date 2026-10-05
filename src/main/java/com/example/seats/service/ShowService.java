@@ -21,10 +21,12 @@ public class ShowService {
 
 	private final ShowRepository shows;
 	private final SeatRepository seats;
+	private final SeatGauges seatGauges;
 
-	public ShowService(ShowRepository shows, SeatRepository seats) {
+	public ShowService(ShowRepository shows, SeatRepository seats, SeatGauges seatGauges) {
 		this.shows = shows;
 		this.seats = seats;
+		this.seatGauges = seatGauges;
 	}
 
 	@Transactional
@@ -36,6 +38,7 @@ public class ShowService {
 		Show show = new Show(UUID.randomUUID(), req.name(), req.pricePaise(), limit, req.seats().size());
 		shows.insert(show);
 		seats.insertAll(show.id(), req.seats());
+		seatGauges.register(show.id());
 		return ShowResponse.of(show, seats.findByShow(show.id()));
 	}
 

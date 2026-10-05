@@ -147,7 +147,7 @@ The `reservation_id = $r` guard means a cancel can never release a seat now owne
 | `POST /shows` | admin (`X-Admin-Token`) | `{name, seats[], price_paise, per_user_limit?}` → show with every seat `available` |
 | `GET /shows/{id}` | none | Per-seat status + counts from one query, so `available + held + confirmed == total_seats` by construction |
 | `/actuator/health/liveness` | none | No dependency checks |
-| `/actuator/health/readiness` | none | Includes `db`; 503 when Postgres unreachable (fails closed) |
+| `/actuator/health/readiness` | none | `dbConnectivity`: own connection with 2s timeouts, outside the pool; 503 within ~2s when Postgres is unreachable (fails closed), and not starved by a busy pool during a burst |
 | `/actuator/prometheus` | none | Metrics below |
 
 ## Errors
@@ -163,11 +163,11 @@ Zero 5xx is a requirement: every domain outcome maps to 4xx.
 
 ## Observability
 
-- `reservations_confirmed_total` (counter)
-- `reservations_declined_total{reason=seat_taken|per_user_limit|idempotent_replay|key_reused}` (counter)
+- `reservations_confirmed_total`, `reservations_cancelled_total` (counters, incremented after commit only)
+- `reservations_declined_total{reason=seat_taken|per_user_limit|idempotent_replay|key_reused|not_found|invalid_request}` (counter)
 - `seats{show,status}` (gauge, read from DB at scrape time so it reconciles with the API)
-- request latency histogram
-- Structured JSON logs; `X-Request-ID` accepted or generated, put in MDC, echoed in the response.
+- `http_server_requests_seconds` (Spring's built-in latency metrics)
+- Structured JSON logs (ECS). `X-Request-ID` is accepted if it matches `[A-Za-z0-9._-]{1,64}`, otherwise generated; it is put in the MDC and echoed in the response. One access line per request plus one outcome line per reservation (user, show, seats, outcome, reservation id).
 
 ## Risks
 

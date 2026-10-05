@@ -61,6 +61,11 @@ public class SeatRepository {
 				""", showId, labels.toArray(String[]::new), reservationId);
 	}
 
+	public int countByStatus(UUID showId, SeatStatus status) {
+		return jdbc.queryForObject("SELECT count(*) FROM seats WHERE show_id = ? AND status = ?::seat_status",
+				Integer.class, showId, status.json());
+	}
+
 	/** A single SELECT is one snapshot, so the statuses it returns are mutually consistent. */
 	public List<Seat> findByShow(UUID showId) {
 		return jdbc.query("SELECT label, status FROM seats WHERE show_id = ? ORDER BY label",

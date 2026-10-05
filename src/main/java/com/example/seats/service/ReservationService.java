@@ -11,6 +11,7 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.example.seats.exception.ApiException;
 import com.example.seats.exception.BadRequestException;
 import com.example.seats.exception.KeyReusedException;
 import com.example.seats.exception.NotFoundException;
@@ -36,14 +37,16 @@ public class ReservationService {
 	private final ReservationRepository reservations;
 	private final UserRepository users;
 	private final UserShowCountRepository userShowCounts;
+	private final ReservationEvents events;
 
 	public ReservationService(ShowRepository shows, SeatRepository seats, ReservationRepository reservations,
-			UserRepository users, UserShowCountRepository userShowCounts) {
+			UserRepository users, UserShowCountRepository userShowCounts, ReservationEvents events) {
 		this.shows = shows;
 		this.seats = seats;
 		this.reservations = reservations;
 		this.users = users;
 		this.userShowCounts = userShowCounts;
+		this.events = events;
 	}
 
 	/**
@@ -53,6 +56,16 @@ public class ReservationService {
 	 */
 	@Transactional
 	public ReservationResponse reserve(String userId, UUID showId, List<String> requestedSeats, String key) {
+		try {
+			return doReserve(userId, showId, requestedSeats, key);
+		}
+		catch (ApiException e) {
+			events.declined(e.reason(), userId, showId, requestedSeats);
+			throw e;
+		}
+	}
+
+	private ReservationResponse doReserve(String userId, UUID showId, List<String> requestedSeats, String key) {
 		List<String> labels = requestedSeats.stream().sorted().toList();
 		if (new HashSet<>(labels).size() != labels.size()) {
 			throw new BadRequestException("duplicate seat labels");
@@ -72,6 +85,7 @@ public class ReservationService {
 			if (!existing.requestHash().equals(reservation.requestHash())) {
 				throw new KeyReusedException();
 			}
+			events.replayed(existing);
 			return ReservationResponse.of(existing);
 		}
 
@@ -87,6 +101,7 @@ public class ReservationService {
 			throw new SeatTakenException();
 		}
 		seats.confirm(showId, labels, reservation.id(), userId);
+		events.confirmed(reservation);
 		return ReservationResponse.of(reservation);
 	}
 
@@ -105,6 +120,7 @@ public class ReservationService {
 		seats.lockForUpdate(r.showId(), r.seats());
 		seats.release(r.showId(), r.seats(), r.id());
 		reservations.markCancelled(r.id());
+		events.cancelled(r);
 		return new ReservationResponse(r.id(), r.showId(), r.userId(), r.seats(), r.amountPaise(),
 				ReservationStatus.CANCELLED);
 	}
