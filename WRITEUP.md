@@ -124,6 +124,7 @@ Signals available today:
 - `http_server_requests_seconds`
 - `hikaricp_connections_pending` / `_active`
 - JSON logs with `request_id` and a per-reservation outcome line
+- a Grafana dashboard over all of these (`docker compose --profile monitoring up`)
 
 **Page:**
 - **Any 5xx on the reserve route** (`http_server_requests_seconds_count{uri=".../reserve",outcome="SERVER_ERROR"}` rate > 0). Declines are 4xx by design, so a 5xx is always a bug or an outage.
@@ -178,9 +179,9 @@ scan in label order; the lock is kept so the order is guaranteed rather than inc
    load-shedding (a bounded in-flight limit on reserve) so overload degrades into fast,
    retryable responses.
 3. **Time-boxed holds and payment**, as described above.
-4. **Scale the seat gauges.** They run one query per show and status per scrape and are
-   registered for every show ever created. For many shows, switch to one grouped query per
-   scrape and only track shows that are on sale.
+4. **Prune the seat gauges.** A scrape already costs one grouped query. But gauges are
+   registered for every show ever created, so the series count grows forever; only shows
+   that are on sale should be tracked.
 5. **Real identity:** replace the demo token endpoint with an OIDC provider. Nothing else
    changes, because the service only reads `sub`.
 6. **Natural seat ordering** in `GET /shows/{id}` (`A2` before `A12`). This is display only; the

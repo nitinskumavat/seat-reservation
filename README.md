@@ -28,6 +28,8 @@ curl localhost:8080/actuator/health/readiness      # {"status":"UP"}
 
 Stop with `docker compose down`. The database is discarded, so the next start is empty.
 
+Optional live dashboard (Prometheus + Grafana): see [Dashboard](#dashboard).
+
 ## Walkthrough
 
 Copy and paste the block below. It needs `jq`. Each run uses fresh user names, so you can run it
@@ -211,7 +213,7 @@ running. The concurrency tests cover:
 | `reservations_confirmed_total` | New reservations, counted after commit |
 | `reservations_cancelled_total` | Cancellations, counted after commit |
 | `reservations_declined_total{reason}` | `seat_taken`, `per_user_limit`, `key_reused`, `idempotent_replay` (and `not_found`, `invalid_request` when raised inside the reserve transaction) |
-| `seats{show,status}` | Seats per show and status, read from the database at scrape time, so it matches `GET /shows/{id}` |
+| `seats{show,status}` | Seats per show and status, read from the database at scrape time with one grouped query (cached up to 1s), so it matches `GET /shows/{id}` |
 | `http_server_requests_seconds` | Request count and latency by route and status (Spring built-in) |
 | `hikaricp_connections_active` / `_pending` | Connection pool use; `pending` rising means requests are queueing for the database |
 
@@ -226,6 +228,29 @@ docker compose logs -f app                                     # follow live
 docker compose logs app | grep '"request_id":"<id>"'           # one request, end to end
 docker compose logs -f app | jq -c '{t:."@timestamp", id:.request_id, msg:.message}'   # compact
 ```
+
+### Dashboard
+
+An optional Prometheus + Grafana stack with a ready-made dashboard. It sits behind a compose
+profile, so the default `docker compose up` stays just the app and Postgres.
+
+```bash
+docker compose --profile monitoring up -d --build
+open http://localhost:3000          # dashboard opens directly; no login needed to view
+./burst.sh                          # watch it fill in
+docker compose --profile monitoring down
+```
+
+Prometheus scrapes the app every 2s (UI on `localhost:9090`). The dashboard shows:
+- **Stat tiles:** confirmed, each decline reason, and 5xx since start (must stay 0)
+- **Outcomes per second:** confirmed and each decline reason
+- **Seat counts** of the show being stampeded
+- **Reserve latency:** p50, p95, p99
+- **HTTP requests per second** by status
+- **Connection pool:** active, pending, max
+- **Service** up or down
+
+To watch a deployed instance, point the scrape target in `monitoring/prometheus.yml` at its host.
 
 ## Configuration
 
@@ -252,4 +277,5 @@ src/main/java/com/example/seats/
 src/main/resources/db/migration/   Flyway schema
 src/test/java/                     integration and concurrency tests
 burst/Burst.java, burst.sh         load test
+monitoring/                        optional Prometheus + Grafana (compose profile "monitoring")
 ```

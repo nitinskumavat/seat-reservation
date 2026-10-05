@@ -1,9 +1,12 @@
 package com.example.seats.repository;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.stereotype.Repository;
 
 import com.example.seats.model.Seat;
@@ -61,9 +64,17 @@ public class SeatRepository {
 				""", showId, labels.toArray(String[]::new), reservationId);
 	}
 
-	public int countByStatus(UUID showId, SeatStatus status) {
-		return jdbc.queryForObject("SELECT count(*) FROM seats WHERE show_id = ? AND status = ?::seat_status",
-				Integer.class, showId, status.json());
+	/** Seat counts for every show in one query, keyed by {@link #countKey}. */
+	public Map<String, Integer> countAllByShowAndStatus() {
+		Map<String, Integer> counts = new HashMap<>();
+		jdbc.query("SELECT show_id, status, count(*) AS n FROM seats GROUP BY show_id, status",
+				(RowCallbackHandler) rs -> counts.put(countKey(rs.getObject("show_id", UUID.class),
+						SeatStatus.fromDb(rs.getString("status"))), rs.getInt("n")));
+		return counts;
+	}
+
+	public static String countKey(UUID showId, SeatStatus status) {
+		return showId + "|" + status.json();
 	}
 
 	/** A single SELECT is one snapshot, so the statuses it returns are mutually consistent. */

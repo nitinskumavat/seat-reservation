@@ -1,0 +1,10 @@
+global:
+  scrape_interval: 2s
+
+scrape_configs:
+  - job_name: seat-reservation
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["app:8080"]
+    # To watch a deployed instance instead, replace the target with its host and add:
+    # scheme: https

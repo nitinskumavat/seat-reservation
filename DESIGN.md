@@ -180,7 +180,8 @@ Every domain outcome maps to a 4xx, so the burst produces zero 5xx. A 5xx happen
 
 - `reservations_confirmed_total`, `reservations_cancelled_total` (counters, incremented after commit only)
 - `reservations_declined_total{reason}` (counter): `seat_taken`, `per_user_limit`, `key_reused`, `idempotent_replay`, plus `not_found` / `invalid_request` when raised inside the reserve transaction (request-shape errors rejected by the controller are not counted)
-- `seats{show,status}` (gauge, read from DB at scrape time so it reconciles with the API)
+- `seats{show,status}` (gauge): read from the DB at scrape time so it reconciles with the API. One grouped query serves all shows, cached up to 1s, so a scrape uses one pool connection however many shows exist. Decline counters for the main reasons are created at 0 on startup, so Prometheus' `increase()` sees the first burst.
+- Optional dashboard: `docker compose --profile monitoring up` starts Prometheus (2s scrape) and Grafana with a provisioned dashboard (`monitoring/`).
 - `http_server_requests_seconds` (Spring's built-in latency metrics), `hikaricp_connections_active` / `_pending` (pool use)
 - Structured JSON logs (ECS). `X-Request-ID` is accepted if it matches `[A-Za-z0-9._-]{1,64}`, otherwise generated; it is put in the MDC and echoed in the response. One access line per request plus one outcome line per reservation (user, show, seats, outcome, reservation id).
 

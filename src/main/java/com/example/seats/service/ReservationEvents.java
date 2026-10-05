@@ -31,6 +31,11 @@ public class ReservationEvents {
 		this.registry = registry;
 		this.confirmed = Counter.builder("reservations.confirmed").register(registry);
 		this.cancelled = Counter.builder("reservations.cancelled").register(registry);
+		// Create the main decline series at 0 up front: a series that first appears already at
+		// N looks like no change to Prometheus' increase(), hiding the first burst.
+		for (String reason : new String[] { "seat_taken", "per_user_limit", "key_reused", "idempotent_replay" }) {
+			declinedCounter(reason);
+		}
 	}
 
 	void confirmed(Reservation r) {
