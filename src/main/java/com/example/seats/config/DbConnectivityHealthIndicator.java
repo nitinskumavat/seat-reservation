@@ -5,9 +5,10 @@ import java.sql.DriverManager;
 import java.sql.Statement;
 import java.util.Properties;
 
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.health.contributor.AbstractHealthIndicator;
 import org.springframework.boot.health.contributor.Health;
+import org.springframework.boot.jdbc.autoconfigure.JdbcConnectionDetails;
 import org.springframework.stereotype.Component;
 
 /**
@@ -21,9 +22,13 @@ class DbConnectivityHealthIndicator extends AbstractHealthIndicator {
 	private final String url;
 	private final Properties props = new Properties();
 
-	DbConnectivityHealthIndicator(@Value("${spring.datasource.url}") String url,
-			@Value("${spring.datasource.username}") String username,
-			@Value("${spring.datasource.password}") String password) {
+	/** Uses the same connection details as the pool, whether they come from properties or a test container. */
+	@Autowired
+	DbConnectivityHealthIndicator(JdbcConnectionDetails db) {
+		this(db.getJdbcUrl(), db.getUsername(), db.getPassword());
+	}
+
+	DbConnectivityHealthIndicator(String url, String username, String password) {
 		this.url = url;
 		props.setProperty("user", username);
 		props.setProperty("password", password);

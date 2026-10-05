@@ -13,6 +13,7 @@ Java 21 · Spring Boot 4.1 · Postgres 17 · plain SQL via `JdbcTemplate`
 |---|---|
 | [DESIGN.md](DESIGN.md) | Schema, the exact reserve and cancel transactions, every idempotency case |
 | [WRITEUP.md](WRITEUP.md) | Why it is race-free, idempotency, holds, consistency, alerting, AI usage, next steps |
+| [DEPLOY.md](DEPLOY.md) | Running it on a VPS with `compose.prod.yaml` |
 
 **Live URL:** not deployed yet. **Live logs recording:** to be added after deployment.
 
@@ -228,7 +229,7 @@ running. The concurrency tests cover:
 | `reservations_confirmed_total` | New reservations, counted after commit |
 | `reservations_cancelled_total` | Cancellations, counted after commit |
 | `reservations_declined_total{reason}` | `seat_taken`, `per_user_limit`, `key_reused`, `idempotent_replay` (also `not_found`, `invalid_request` when raised inside the reserve transaction) |
-| `seats{show,status}` | Seats per show and status, read from the database at scrape time with one grouped query (cached up to 1s), so it matches `GET /shows/{id}` |
+| `seats{show,status}` | Seats per show and status, read from the database at scrape time with one grouped query (reused for 100ms within a scrape), so it matches `GET /shows/{id}` |
 | `http_server_requests_seconds` | Request count and latency by route and status (Spring built-in) |
 | `hikaricp_connections_active` / `_pending` | Connection pool use; `pending` rising means requests are queueing for the database |
 
@@ -293,4 +294,5 @@ src/main/resources/db/migration/   Flyway schema
 src/test/java/                     integration and concurrency tests
 burst/Burst.java, burst.sh         load test
 monitoring/                        optional Prometheus + Grafana (compose profile "monitoring")
+compose.prod.yaml, .env.example    production stack for a VPS (see DEPLOY.md)
 ```

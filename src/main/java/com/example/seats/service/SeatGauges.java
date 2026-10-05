@@ -17,13 +17,14 @@ import io.micrometer.core.instrument.MeterRegistry;
 
 /**
  * seats{show, status} gauges, read from the database when metrics are scraped so they match
- * GET /shows/{id}. One grouped query serves every gauge in a scrape (cached for a second), so a
- * scrape costs one pool connection no matter how many shows exist.
+ * GET /shows/{id}. One grouped query serves every gauge in a scrape: the result is reused for
+ * 100ms, long enough for one scrape to read all gauges, short enough that a later scrape never
+ * sees a stale value. A scrape therefore costs one pool connection however many shows exist.
  */
 @Component
 public class SeatGauges {
 
-	private static final long MAX_AGE_NANOS = 1_000_000_000L;
+	private static final long MAX_AGE_NANOS = 100_000_000L;
 
 	private final MeterRegistry registry;
 	private final SeatRepository seats;

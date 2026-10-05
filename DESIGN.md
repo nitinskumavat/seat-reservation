@@ -149,7 +149,7 @@ COMMIT → 200
 ## Observability internals
 
 - Counters are incremented after commit, so rolled-back work is never counted. The main decline reasons are created at 0 on startup; a series that first appears already at N looks like no change to Prometheus' `increase()`.
-- `seats{show,status}` gauges are served by one grouped query, cached up to 1s, so a scrape uses one pool connection however many shows exist.
+- `seats{show,status}` gauges are served by one grouped query, reused for 100ms within a scrape, so a scrape uses one pool connection however many shows exist.
 - Readiness opens its own connection with 2s timeouts instead of borrowing from the pool: it fails fast when Postgres is down and is not starved by a busy pool.
 
 ## Risks and what was measured

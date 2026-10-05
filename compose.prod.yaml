@@ -1,0 +1,87 @@
+# Production stack for a single VPS (app + Postgres on one machine), served over http://<ip>:8080.
+#   cp .env.example .env   # then fill in the secrets
+#   docker compose -f compose.prod.yaml up -d --build
+# Optional dashboard on http://<ip>:3000:
+#   docker compose -f compose.prod.yaml --profile monitoring up -d
+name: seat-reservation-prod
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: seats
+      POSTGRES_USER: seats
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    command: ["postgres", "-c", "shared_buffers=${PG_SHARED_BUFFERS:-512MB}", "-c", "max_connections=100"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # No ports: Postgres is reachable only by the app on the internal network.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U seats -d seats"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    logging: *logging
+
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/seats
+      SPRING_DATASOURCE_USERNAME: seats
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN in .env}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-20}
+      # Accept a true on-sale stampede instead of refusing connections past Tomcat's default 8192.
+      SERVER_TOMCAT_MAX_CONNECTIONS: "20000"
+      SERVER_TOMCAT_ACCEPT_COUNT: "1000"
+    ports:
+      - "8080:8080"
+    # The JVM sizes its heap at 75% of this limit, leaving the rest of the box to Postgres.
+    mem_limit: ${APP_MEM_LIMIT:-2g}
+    ulimits:
+      nofile: 65536
+    depends_on:
+      db:
+        condition: service_healthy
+    logging: *logging
+
+  prometheus:
+    image: prom/prometheus:v3.15.0
+    profiles: [monitoring]
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    # Not published: only Grafana reads it.
+    depends_on:
+      - app
+    logging: *logging
+
+  grafana:
+    image: grafana/grafana:13.2.3
+    profiles: [monitoring]
+    restart: unless-stopped
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/seat-reservation.json
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    logging: *logging
+
+volumes:
+  pgdata:
