@@ -26,6 +26,29 @@ public class SeatRepository {
 		});
 	}
 
+	/**
+	 * Row-locks the requested seats in label order. Every transaction locks in the same order,
+	 * so two multi-seat requests can never each hold a seat the other is waiting for. A waiter
+	 * re-reads the row once the lock is released, so it sees the winner's committed status.
+	 */
+	public List<Seat> lockForUpdate(UUID showId, List<String> labels) {
+		return jdbc.query("""
+				SELECT label, status FROM seats
+				WHERE show_id = ? AND label = ANY(?)
+				ORDER BY label
+				FOR UPDATE
+				""", (rs, i) -> new Seat(rs.getString("label"), SeatStatus.fromDb(rs.getString("status"))),
+				showId, labels.toArray(String[]::new));
+	}
+
+	/** Only called while holding the row locks taken by {@link #lockForUpdate}. */
+	public void confirm(UUID showId, List<String> labels, UUID reservationId, String userId) {
+		jdbc.update("""
+				UPDATE seats SET status = 'confirmed', reservation_id = ?, user_id = ?
+				WHERE show_id = ? AND label = ANY(?)
+				""", reservationId, userId, showId, labels.toArray(String[]::new));
+	}
+
 	/** A single SELECT is one snapshot, so the statuses it returns are mutually consistent. */
 	public List<Seat> findByShow(UUID showId) {
 		return jdbc.query("SELECT label, status FROM seats WHERE show_id = ? ORDER BY label",
